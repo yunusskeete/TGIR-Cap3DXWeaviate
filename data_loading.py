@@ -61,9 +61,7 @@ with weaviate.WeaviateClient(
         ),  # Values in seconds
     ),
 ) as client:
-    assert (
-        client.is_live()
-    ), "Weaviate client is not live"  # This will raise an exception if the client is not live
+    assert client.is_live(), "Weaviate client is not live"
     print("Client connection established")
 
     try:
@@ -85,10 +83,6 @@ with weaviate.WeaviateClient(
 
         objects_buffer: List[DataObject] = []
 
-        # with cap3d.batch.dynamic() as cap3d_batch:
-        # with cap3d_upload.batch.dynamic() as cap3d_upload_batch:
-        # with cap3d_upload.batch.fixed_size(BATCH_SIZE) as cap3d_upload_batch:
-        # TODO: Use batching with `insert_many()` from https://weaviate.io/developers/weaviate/starter-guides/custom-vectors#import-data-with-vectors
         for object_idx, object_folder in tqdm(
             enumerate(path_to_example_objects.iterdir())
         ):
@@ -121,147 +115,332 @@ with weaviate.WeaviateClient(
 
                 image_uuids_per_object.append(image_object_uuid)
 
-                data_object: DataObject = DataObject(
+                try:
+                    cap3d_upload.data.insert(
+                        properties=image_obj,
+                        uuid=image_object_uuid,
+                    )
+                except weaviate.exceptions.UnexpectedStatusCodeError as e:
+                    print(e)
+                    print(object_image_idx)
+
+                image_data_object: DataObject = DataObject(
                     properties=image_obj,
                     uuid=image_object_uuid,
                 )
-
-                if object_image_idx == 19:
-                    # buffer = []
-                    # buffer.append(data_object)
-                    # l = len(buffer)
-                    image_objects_buffer = []
-                # Add object to batch queue
                 image_objects_buffer.append(
-                    data_object
+                    image_data_object
                 )  # Batcher automatically sends batches
-                # assert upload_uuid, "Failed upload"
 
-            batch_image_objects_return: BatchObjectReturn = (
-                cap3d_upload.data.insert_many(image_objects_buffer)  # Insert in batch
-            )
-
-            # Check for failed inserts
-            if batch_image_objects_return.has_errors:
-                errors: Dict[int, ErrorObject] = batch_image_objects_return.errors
-                print(f"Failed to upload {len(errors)} image objects")
-
-                for error_object in errors:
-                    print(f"Failed to upload object with error: {error_object.message}")
-                # TODO: Handle errors
-
-            # num_failed_uploads: int = len(cap3d_upload.batch.failed_objects)
-            # if num_failed_uploads > 0:
-            #     print(f"Failed to import {num_failed_uploads} objects")
-            #     for failed in cap3d_upload.batch.failed_objects:
-            #         print(
-            #             f"Failed to import image object with error: {failed.message}"
-            #         )
-
-            # if object_idx % 5000 == 0:
-            #     counted_objects: int = cap3d_upload.aggregate.over_all(
-            #         total_count=True
-            #     ).total_count
-
-            #     if DELETE_ON_UPLOAD:
-            #         assert counted_objects == 20, "Failed upload"
-
-            data_objects: List[
-                weaviate.collections.classes.internal.ObjectSingleReturn
-            ] = [
-                cap3d_upload.query.fetch_object_by_id(uuid, include_vector=True)
-                for uuid in image_uuids_per_object
-            ]
-            # data_objects: List[
-            #     weaviate.collections.classes.internal.ObjectSingleReturn
-            # ] = [item for item in cap3d_upload.iterator(include_vector=True)]
-            data_objects = [obj for obj in data_objects if obj]
-            assert data_objects, "No data objects"
-
+            i = 0
             try:
-                average_vector: np.array = np.mean(
-                    np.array(
-                        [data_object.vector["default"] for data_object in data_objects]
-                    ),
-                    axis=0,
-                )
-            except Exception as e:
-                print(f"Numpy exception: {e}")
-
-            # Build the object payload
-            object_uuid: str = generate_uuid5(object_folder.name)  # object_folder.name
-
-            obj: Dict[str, str] = {
-                "description": object_description,
-                "datasetUID": object_uuid,  # E.g. "c5517f31ede34ad0a0da1f38753f9588_00005.png"
-            }
-            # # Add object to batch queue
-            # # cap3d_batch.add_object(
-            # uuid: str = cap3d.data.insert(
-            #     # properties=obj,
-            #     obj,
-            #     uuid=object_uuid,
-            #     # references=reference_obj  # You can add references here
-            # )  # Batcher automatically sends batches
-
-            # assert uuid, "Failed insert"
-
-            try:
-                objects_buffer.append(
-                    DataObject(
-                        properties=obj,
-                        vector=average_vector,
-                        uuid=object_uuid,
-                    )
-                )
-            except Exception as e:
-                print(f"DataObject instantiation exception: {e}")
-
-            # Check if the buffer is full
-            if len(objects_buffer) >= BUFFER_SIZE:
-                try:
-                    # Insert into the database
-                    batch_objects_return: BatchObjectReturn = cap3d.data.insert_many(
-                        objects_buffer
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
                     )  # Insert in batch
-                except Exception as e:
-                    print(f"Insert many objects exception: {e}")
-
-                # Clear the buffer
-                objects_buffer = []
-
-                # Check for failed inserts
-                if batch_objects_return.has_errors:
-                    errors: Dict[int, ErrorObject] = batch_objects_return.errors
-                    print(f"Failed to upload {len(errors)} objects")
-
-                    for error_object in errors:
-                        print(
-                            f"Failed to upload object with error: {error_object.message}"
-                        )
-                    # TODO: Handle errors
-
-            # if object_idx % 5000 == 0:
-            #     counted_objects: int = cap3d.aggregate.over_all(
-            #         total_count=True
-            #     ).total_count
-            #     assert (
-            #         object_idx + 1 == counted_objects
-            #     ), f"Unexpected number of objects in database (object count: {object_idx + 1}, counted objects: {counted_objects})"
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
+            try:
+                batch_image_objects_return: BatchObjectReturn = (
+                    # cap3d_upload.data.insert_many(
+                    cap3d_upload.data.insert(
+                        # [image_objects_buffer[i]]
+                        image_objects_buffer[i]
+                    )  # Insert in batch
+                )
+                i += 1
+            except:
+                pass
 
             # # Check for failed inserts
-            # if len(cap3d.batch.failed_objects) > 0:
-            #     print(f"Failed to import {len(cap3d.batch.failed_objects)} objects")
-            #     for failed in cap3d.batch.failed_objects:
-            #         print(
-            #             f"e.g. Failed to import object with error: {failed.message}"
+            # if batch_image_objects_return.has_errors:
+            #     errors: Dict[int, ErrorObject] = batch_image_objects_return.errors
+            #     print(f"Failed to upload {len(errors)} image objects")
+
+            #     for error_object in errors:
+            #         print(f"Failed to upload object with error: {error_object.message}")
+            #     # TODO: Handle errors
+
+            # data_objects: List[
+            #     weaviate.collections.classes.internal.ObjectSingleReturn
+            # ] = [
+            #     cap3d_upload.query.fetch_object_by_id(uuid, include_vector=True)
+            #     for uuid in image_uuids_per_object
+            # ]
+            # data_objects = [obj for obj in data_objects if obj]
+            # assert len(data_objects) == 20, "Missing data object"
+            # # assert data_objects, "No data objects"
+
+            # try:
+            #     # Check that all vectors have the same shape
+            #     vector_shapes = {
+            #         data_object.vector["default"].shape for data_object in data_objects
+            #     }
+
+            #     if len(vector_shapes) > 1:
+            #         raise ValueError(
+            #             "Vectors have inconsistent shapes: ", vector_shapes
             #         )
 
-            if DELETE_ON_UPLOAD:
-                # On success, delete image objects from cap3d_upload collection
-                cap3d_upload.data.delete_many(
-                    where=Filter.by_id().contains_any(image_uuids_per_object)
-                )
+            #     average_vector: np.array = np.mean(
+            #         np.array(
+            #             [data_object.vector["default"] for data_object in data_objects]
+            #         ),
+            #         axis=0,
+            #     )
+            # except Exception as e:
+            #     print(f"Numpy exception: {e}")
+
+            # # Build the object payload
+            # object_uuid: str = generate_uuid5(object_folder.name)  # object_folder.name
+
+            # obj: Dict[str, str] = {
+            #     "description": object_description,
+            #     "datasetUID": object_uuid,  # E.g. "c5517f31ede34ad0a0da1f38753f9588_00005.png"
+            # }
+
+            # try:
+            #     objects_buffer.append(
+            #         DataObject(
+            #             properties=obj,
+            #             vector=average_vector,
+            #             uuid=object_uuid,
+            #         )
+            #     )
+            # except Exception as e:
+            #     print(f"DataObject instantiation exception: {e}")
+
+            # # Check if the buffer is full
+            # if len(objects_buffer) >= BUFFER_SIZE:
+            #     try:
+            #         # Insert into the database
+            #         batch_objects_return: BatchObjectReturn = cap3d.data.insert_many(
+            #             objects_buffer
+            #         )  # Insert in batch
+            #     except Exception as e:
+            #         print(f"Insert many objects exception: {e}")
+
+            #     # Clear the buffer
+            #     objects_buffer = []
+
+            #     # Check for failed inserts
+            #     if batch_objects_return.has_errors:
+            #         errors: Dict[int, ErrorObject] = batch_objects_return.errors
+            #         print(f"Failed to upload {len(errors)} objects")
+
+            #         for error_object in errors:
+            #             print(
+            #                 f"Failed to upload object with error: {error_object.message}"
+            #             )
+            #         # TODO: Handle errors
+
+            # if DELETE_ON_UPLOAD:
+            #     # On success, delete image objects from cap3d_upload collection
+            #     cap3d_upload.data.delete_many(
+            #         where=Filter.by_id().contains_any(image_uuids_per_object)
+            #     )
 
     except Exception as e:
         print(f"client operation failed: {e}")
