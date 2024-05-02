@@ -64,6 +64,7 @@ def get_latest_descriptions(
     captions_url: str = CAPTIONS_URL,
     requests_timeout: PositiveInt = REQUESTS_TIMEOUT,
     chunk_size: PositiveInt = CHUNK_SIZE,
+    performing_checksum: bool = True,
     logger: Optional[logging.Logger] = None,
 ) -> Dict[str, str]:
     """
@@ -85,6 +86,8 @@ def get_latest_descriptions(
         The timeout for the HTTP request in seconds. Defaults to 60.
     chunk_size : PositiveInt, optional
         The size of data chunks to read at a time during file download. Defaults to 8192.
+    performing_checksum : bool, optional
+        Flag to dictat whether checksum validation process is performed.
     logger : Optional[logging.Logger], optional
         An instance of `logging.Logger` for logging events during execution. If not provided,
         a new logger with default settings will be created.
@@ -127,8 +130,11 @@ def get_latest_descriptions(
 
     if not DESCRIPTION_FILE_PATH.exists() or (
         DESCRIPTION_FILE_PATH.exists()
-        and not perform_checksum(
-            file_path=description_file_name, pointer_file_url=pointer_file_url
+        and (
+            performing_checksum
+            and not perform_checksum(
+                file_path=description_file_name, pointer_file_url=pointer_file_url
+            )
         )
     ):
         logger.info(
@@ -138,9 +144,10 @@ def get_latest_descriptions(
             url=captions_url,
             file=DESCRIPTION_FILE_PATH,
             requests_timeout=requests_timeout,
+            chunk_size=chunk_size,
         )
 
-    logger.info("Reading latest descriptions file")
+    logger.info(f"Reading {'latest' if performing_checksum else ''} descriptions file")
     # Read the CSV into a DataFrame
     df = pd.read_csv(
         DESCRIPTION_FILE_PATH, header=None, names=["datasetUID", "description"]
