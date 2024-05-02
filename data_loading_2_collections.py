@@ -1,5 +1,4 @@
 import base64
-import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -7,8 +6,6 @@ import numpy as np
 import weaviate
 import weaviate.classes as wvc
 import weaviate.classes.config as wc
-from PIL import Image
-from sentence_transformers import SentenceTransformer, util
 from tqdm import tqdm
 from weaviate.classes.data import DataObject
 from weaviate.classes.init import AdditionalConfig, Timeout
@@ -37,7 +34,7 @@ COLLECTION_NAME = "Cap3DMM"
 DATA_UPLOAD_COLLECTION_NAME = "UploadCap3DMM"
 
 BATCH_SIZE = 19
-BUFFER_SIZE = 100
+BUFFER_SIZE = 500
 PATH_TO_EXAMPLE_OBJECTS = "/home/yunusskeete/Documents/data/3D/Cap3D/local-split/unzips/compressed_imgs_perobj_00.zip/Cap3D_Objaverse_renderimgs"
 IMAGE_FILE_EXTENSION = ".png"
 IMAGE_FILE_DELIMETER = "_"
@@ -46,14 +43,7 @@ DELETE_ON_UPLOAD = False
 
 PERFORMING_CHECKSUM = False
 
-MODEL_NAME = "clip-ViT-B-32"
-
 path_to_example_objects = Path(PATH_TO_EXAMPLE_OBJECTS)
-
-# pil_logger = logging.getLogger("PIL")
-# if pil_logger.hasHandlers():
-#     pil_logger.setLevel(logging.INFO)
-logging.disable(logging.DEBUG)
 
 descriptions_dict = get_latest_descriptions(
     performing_checksum=PERFORMING_CHECKSUM
@@ -89,42 +79,101 @@ with weaviate.WeaviateClient(
             configure_upload_collection=False,
         )
         assert cap3d.aggregate.over_all(total_count=True).total_count == 0
-
-        # Load CLIP model
-        model = SentenceTransformer(MODEL_NAME)
+        cap3d_upload: Collection = create_collection(
+            client=client,
+            collection_name=DATA_UPLOAD_COLLECTION_NAME,
+            configure_upload_collection=True,
+        )
+        assert cap3d_upload.aggregate.over_all(total_count=True).total_count == 0
 
         objects_buffer: List[DataObject] = []
-        failed_objects: List[List[int, str]] = []
+        failed_objects: List[Tuple[int, str]] = []
 
         for object_idx, object_folder in tqdm(
             enumerate(path_to_example_objects.iterdir())
         ):
+            # if object_idx < 2191:  # 1264:
+            #     continue
+            image_uuids_per_object: List[str] = []
+            image_objects_buffer: List[DataObject] = []
+
             object_description: str = descriptions_dict.get(
                 object_folder.name, ""
             )  # TODO: Add log if object could not be found, add to tracking list and DO NOT UPLOAD
 
-            object_image_files: List[Path] = [
-                file
-                for file in object_folder.iterdir()
-                if file.suffix == IMAGE_FILE_EXTENSION
-                and IMAGE_FILE_DELIMETER not in file.name
-            ]
+            for object_image_idx, object_image_file in enumerate(
+                sorted(
+                    (
+                        file
+                        for file in object_folder.iterdir()
+                        if file.suffix == IMAGE_FILE_EXTENSION
+                        and IMAGE_FILE_DELIMETER not in file.name
+                    ),
+                    key=lambda file: file.name,
+                )
+            ):
+                # Convert image to base64
+                with object_image_file.open("rb") as file:
+                    image_b64: str = base64.b64encode(file.read()).decode(
+                        IMAGE_ENCODING
+                    )
 
-            images: List[Image] = [
-                Image.open(object_image) for object_image in object_image_files
-            ]
+                # Build the image object payload
+                image_obj: Dict[str, str] = {
+                    "image": image_b64,
+                    "description": object_description,
+                    "datasetUID": f"{object_image_file.parent.name}_{object_image_file.name}",  # E.g. "c5517f31ede34ad0a0da1f38753f9588_00005.png"
+                }
 
-            # Average embeddings from each angle before inserting into database
+                image_object_uuid: str = generate_uuid5(image_obj["datasetUID"])
+
+                image_uuids_per_object.append(image_object_uuid)
+
+                image_objects_buffer.append(
+                    DataObject(
+                        properties=image_obj,
+                        uuid=image_object_uuid,
+                    )
+                )  # Batcher automatically sends batches
+
             try:
-                average_embedding: List[float] = np.mean(
-                    model.encode(images, show_progress_bar=False),
+                batch_image_objects_return: BatchObjectReturn = (
+                    cap3d_upload.data.insert_many(
+                        image_objects_buffer
+                    )  # Insert in batch
+                )
+            except weaviate.exceptions.WeaviateInsertManyAllFailedError as e:
+                print(e)
+                failed_object_identifier: Tuple[int, str] = (
+                    object_idx,
+                    object_folder.name,
+                )
+                failed_objects.append(failed_object_identifier)
+                print(failed_object_identifier)
+                continue
+
+            data_objects: List[
+                weaviate.collections.classes.internal.ObjectSingleReturn
+            ] = [
+                cap3d_upload.query.fetch_object_by_id(uuid, include_vector=True)
+                for uuid in image_uuids_per_object
+            ]
+            data_objects = [obj for obj in data_objects if obj]
+            assert len(data_objects) == 20, "Missing data object"
+
+            try:
+                average_vector: List[float] = np.mean(
+                    np.array(
+                        [data_object.vector["default"] for data_object in data_objects]
+                    ),
                     axis=0,
                 ).tolist()
-                # assert (
-                #     len([emb for emb in average_embedding if emb]) == 512
-                # ), "Ill-sized embedding"
             except Exception as e:
                 print(f"Numpy exception: {e}")
+
+            assert isinstance(
+                average_vector, list
+            ), f"Vector is of invalid format: received '{type(average_vector)}', expecting '{type([])}'"
 
             # Build the object payload
             object_uuid: str = generate_uuid5(object_folder.name)
@@ -138,19 +187,19 @@ with weaviate.WeaviateClient(
                 objects_buffer.append(
                     DataObject(
                         properties=obj,
-                        vector=average_embedding,
+                        vector=average_vector,
                         uuid=object_uuid,
                     )
                 )
             except Exception as e:
                 print(e)
-                failed_object_identifier: List[int, str] = [
+                failed_object_identifier: Tuple[int, str] = (
                     object_idx,
                     object_folder.name,
-                ]
+                )
                 failed_objects.append(failed_object_identifier)
                 print(failed_object_identifier)
-                print(f"Error appending DataObject to buffer: {e}")
+                print(f"DataObject instantiation exception: {e}")
 
             # Check if the buffer is full
             if len(objects_buffer) >= BUFFER_SIZE:
@@ -175,11 +224,16 @@ with weaviate.WeaviateClient(
                             f"Failed to upload object with error: {error_object.message}"
                         )
                     # TODO: Handle errors
-        # TODO: Check buffer is empty, JSON dump failed_objects
+
+            if DELETE_ON_UPLOAD:
+                # On success, delete image objects from cap3d_upload collection
+                cap3d_upload.data.delete_many(
+                    where=Filter.by_id().contains_any(image_uuids_per_object)
+                )
 
     except Exception as e:
         print(f"client operation failed: {e}")
 
-    print(
-        "Closing client connection"
-    )  # The connection is closed automatically when the context manager exits
+    print("Closing client connection")
+    pass
+    # The connection is closed automatically when the context manager exits
