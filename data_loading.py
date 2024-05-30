@@ -120,9 +120,6 @@ with weaviate.WeaviateClient(
                     model.encode(images, show_progress_bar=False),
                     axis=0,
                 ).tolist()
-                # assert (
-                #     len([emb for emb in average_embedding if emb]) == 512
-                # ), "Ill-sized embedding"
             except Exception as e:
                 print(f"Numpy exception: {e}")
 
